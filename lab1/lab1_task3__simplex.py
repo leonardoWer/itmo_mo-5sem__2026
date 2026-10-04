@@ -1,39 +1,86 @@
 from fractions import Fraction
-from typing import List
+from typing import List, Optional, Set
 
 
 class SimplexSolver:
     """
-    Универсальный класс для решения задач симплекс-методом
-    - Решаем только задачи W -> min
+    Универсальный симплекс-метод для задачи W -> min
     - Принимает задачу в общем виде, сам приводит к каноническому виду
+    - Поддерживает свободные переменные (любого знака)
+    - Работает с дробями для точности
     """
 
-    def __init__(self, c, A, b, signs, maximize=True):
+    def __init__(self, c, A, b, signs, maximize=True, free_vars=None):
         """
-        c        - коэффициенты целевой функции
-        A        - матрица ограничений
-        b        - правая часть
-        signs    - знаки ограничений: '<=', '>=', '='
-        maximize - True если исходно Z -> max, False если W -> min
+        c         - коэффициенты целевой функции
+        A         - матрица ограничений
+        b         - правая часть
+        signs     - знаки ограничений: '<=', '>=', '='
+        maximize  - True если исходно Z -> max, False если W -> min
+        free_vars - множество индексов свободных переменных (могут быть любого знака)
         """
         self.n = len(c)
         self.m = len(A)
 
-        # приводим целевую функцию к минимизации
         factor = -1 if maximize else 1
         self.c_orig = [Fraction(factor * v) for v in c]
-
         self.A_orig = [[Fraction(v) for v in row] for row in A]
         self.b_orig = [Fraction(v) for v in b]
         self.signs_orig = list(signs)
+        self.free_vars = set(free_vars) if free_vars else set()
 
-        # сюда сложим имена переменных
+        # имена переменных
         self.var_names: List[str] = []
+        # карта: индекс в новой задаче -> (исходный индекс, знак: +1 или -1)
+        self.orig_map = []
 
+        self._apply_free_vars()
         self._build_canonical()
 
+    # ---------------------------------------------------------------
+    # Замена свободных переменных x_k = x_k^+ - x_k^-
+    # ---------------------------------------------------------------
+    def _apply_free_vars(self):
+        """Заменяет свободные переменные разностью двух неотрицательных"""
+        if not self.free_vars:
+            # без замен: всё как есть
+            self.n_new = self.n
+            for i in range(self.n):
+                self.orig_map.append((i, Fraction(1)))
+            self.var_names_orig = [f"x{i+1}" for i in range(self.n)]
+            return
+
+        new_c = []
+        new_A = [[] for _ in range(self.m)]
+        new_names = []
+
+        for j in range(self.n):
+            if j in self.free_vars:
+                # x_j = x_j^+ - x_j^-
+                new_c.append(self.c_orig[j])       # коэффициент при x_j^+
+                new_c.append(-self.c_orig[j])      # коэффициент при x_j^-
+                for i in range(self.m):
+                    new_A[i].append(self.A_orig[i][j])
+                    new_A[i].append(-self.A_orig[i][j])
+                new_names.append(f"x{j+1}+")
+                new_names.append(f"x{j+1}-")
+                self.orig_map.append((j, Fraction(1)))   # x_j^+ даёт +x_j
+                self.orig_map.append((j, Fraction(-1)))  # x_j^- даёт -x_j
+            else:
+                new_c.append(self.c_orig[j])
+                for i in range(self.m):
+                    new_A[i].append(self.A_orig[i][j])
+                new_names.append(f"x{j+1}")
+                self.orig_map.append((j, Fraction(1)))
+
+        self.c_orig = new_c
+        self.A_orig = new_A
+        self.n_new = len(new_c)
+        self.var_names_orig = new_names
+
+    # ---------------------------------------------------------------
     # Приведение к каноническому виду
+    # ---------------------------------------------------------------
     def _build_canonical(self):
         """Преобразует задачу к виду: A x = b, x >= 0, W -> min"""
         A = []
@@ -61,10 +108,10 @@ class SimplexSolver:
             row = A[i] + [Fraction(0)] * extra_count
             if signs[i] == '<=':
                 k = sum(1 for s in signs[:i] if s in ('<=', '>='))
-                row[self.n + k] = Fraction(1)
+                row[self.n_new + k] = Fraction(1)
             elif signs[i] == '>=':
                 k = sum(1 for s in signs[:i] if s in ('<=', '>='))
-                row[self.n + k] = Fraction(-1)
+                row[self.n_new + k] = Fraction(-1)
             A[i] = row
 
         self.A = A
@@ -72,9 +119,9 @@ class SimplexSolver:
         self.signs = signs
         self.c = self.c_orig + [Fraction(0)] * extra_count
 
-        # имена переменных
-        self.var_names = [f"x{i+1}" for i in range(self.n)]
-        idx = self.n
+        # имена переменных: исходные + дополнительные
+        self.var_names = list(self.var_names_orig)
+        idx = self.n_new
         for s in signs:
             if s in ('<=', '>='):
                 idx += 1
@@ -102,14 +149,15 @@ class SimplexSolver:
 
         return basis
 
+    # ---------------------------------------------------------------
     # Вспомогательная задача
+    # ---------------------------------------------------------------
     def _build_auxiliary(self):
         """Добавляет искусственные переменные туда, где нет базиса"""
         art_indices = []
 
         for i in range(self.m):
             if self.basis[i] is None:
-                # добавляем искусственную переменную
                 for k in range(self.m):
                     self.A[k].append(Fraction(1) if k == i else Fraction(0))
                 self.c.append(Fraction(0))
@@ -118,7 +166,7 @@ class SimplexSolver:
                 self.basis[i] = self.total_vars - 1
                 art_indices.append(self.basis[i])
 
-        # целевая функция вспомогательной задачи: W' = сумма искусственных -> min
+        # W' = сумма искусственных -> min
         aux_c = [Fraction(0)] * self.total_vars
         for j in art_indices:
             aux_c[j] = Fraction(1)
@@ -133,17 +181,11 @@ class SimplexSolver:
 
         return aux_c, aux_b, art_indices
 
+    # ---------------------------------------------------------------
     # Симплекс-итерации
+    # ---------------------------------------------------------------
     def _simplex(self, c, b_offset, basis, A, b, forbid=None):
-        """
-        Выполняет симплекс-итерации
-        c        - строка целевой функции
-        b_offset - свободный член целевой функции
-        basis    - текущий базис
-        A, b     - текущая таблица
-        forbid   - столбцы, которые нельзя вводить в базис
-        Возвращает (status, A, b, c, b_offset, basis)
-        """
+        """Выполняет симплекс-итерации. Возвращает (status, A, b, c, b_offset, basis)"""
         if forbid is None:
             forbid = set()
 
@@ -200,7 +242,6 @@ class SimplexSolver:
 
         return 'iteration_limit', A, b, c, b_offset, basis
 
-    # Главный метод решения
     def solve(self):
         """Решает задачу, возвращает (status, x, W)"""
         A = [row[:] for row in self.A]
@@ -210,7 +251,6 @@ class SimplexSolver:
         # если базис не полный - решаем вспомогательную задачу
         if any(v is None for v in basis):
             aux_c, aux_b, art_indices = self._build_auxiliary()
-            # после _build_auxiliary обновляются self.A, self.c, self.basis
             A = [row[:] for row in self.A]
             b = self.b[:]
             basis = list(self.basis)
@@ -222,7 +262,6 @@ class SimplexSolver:
             if status != 'optimal':
                 return status, None, None
 
-            # если W' > 0 - допустимого решения нет
             if b_aux != 0:
                 return 'infeasible', None, None
 
@@ -262,20 +301,32 @@ class SimplexSolver:
         if status != 'optimal':
             return status, None, None
 
-        x = [Fraction(0)] * self.total_vars
+        # значения переменных в расширенной задаче
+        x_ext = [Fraction(0)] * self.total_vars
         for i in range(self.m):
-            x[basis[i]] = b[i]
+            x_ext[basis[i]] = b[i]
 
-        return 'optimal', x, b_offset
+        # восстанавливаем исходные переменные
+        x_orig = [Fraction(0)] * self.n
+        for j in range(self.n_new):
+            orig_idx, sign = self.orig_map[j]
+            x_orig[orig_idx] += sign * x_ext[j]
+
+        return 'optimal', x_orig, b_offset
 
 
-# Решение нашей задачи (вариант 13)
+# ===================================================================
+# Доработал случай свободных переменных
+# ===================================================================
 if __name__ == "__main__":
+    print("=" * 60)
+    print("Задача по моему варианту 13")
+    print("=" * 60)
+
     # Z = 3x1 + x2 + 2x3 + 4x4 -> max
     # 2x1 + x2 + x3 <= 8
     # x1 + x3 + x4 = 6
     # x2 + x4 >= 4
-
     c = [3, 1, 2, 4]
     A = [
         [2, 1, 1, 0],
@@ -288,10 +339,35 @@ if __name__ == "__main__":
     solver = SimplexSolver(c, A, b, signs, maximize=True)
     status, x, W = solver.solve()
 
+    print("Статус:", status)
     if status == 'optimal':
-        print("Найдено оптимальное решение; статус:", status)
-        print("Переменные:")
-        for name, val in zip(solver.var_names, x):
-            if val != 0:
-                print(f"  {name} = {val}")
-        print("Итоговое значение функции: ", W)
+        for i, val in enumerate(x):
+            print(f"  x{i+1} = {val}")
+        print("Z (max) =", W)
+
+    print()
+    print("=" * 60)
+    print("Привожу пример что код после правок работает и со свободнеыми переменными")
+    print("=" * 60)
+
+    # Z = x1 + x2 -> max
+    # x1 + x2 <= 4
+    # x1 - x2 <= 2
+    # x1 >= 0, x2 - свободная (любого знака)
+
+    c2 = [1, 1]
+    A2 = [
+        [1, 1],
+        [1, -1],
+    ]
+    b2 = [4, 2]
+    signs2 = ['<=', '<=']
+
+    solver2 = SimplexSolver(c2, A2, b2, signs2, maximize=True, free_vars={1})
+    status2, x2, W2 = solver2.solve()
+
+    print("Статус:", status2)
+    if status2 == 'optimal':
+        for i, val in enumerate(x2):
+            print(f"  x{i+1} = {val}")
+        print("Z (max) =", W2)
