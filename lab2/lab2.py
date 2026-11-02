@@ -72,7 +72,6 @@ def estimate_lipschitz(f: Callable, a: float, b: float, n: int = 1000) -> float:
 
 
 def is_constant_on(f: Callable, a: float, b: float, n: int = 200) -> bool:
-    """Проверяет, что функция постоянна на отрезке"""
     xs = np.linspace(a, b, n)
     ys = f(xs)
     ys = np.broadcast_to(np.asarray(ys, dtype=float), xs.shape).copy()
@@ -127,18 +126,22 @@ def broken_lines(f: Callable, a: float, b: float, eps: float,
         L = estimate_lipschitz(g, a, b)
 
     if is_constant_on(g, a, b):
-        ya = float(g(a))
-        return Result(
-            x_min=a,
-            f_min=(-ya if maximize else ya),
-            iterations=0,
-            elapsed=time.perf_counter() - t0,
-            history=[(a, ya), (b, float(g(b)))],
-            L=L,
-            converged=True,
-            gap=0.0,
-            stop_reason="функция постоянна на отрезке",
-        )
+        # теперь не смотрим по плоскости сетки: если L осталась на минимуме 1.0
+        # значит estimate_lipschitz не нашла ни одного ненулевого наклона
+        # только огда верим константе
+        if L == 1.0:
+            ya = float(g(a))
+            return Result(
+                x_min=a,
+                f_min=(-ya if maximize else ya),
+                iterations=0,
+                elapsed=time.perf_counter() - t0,
+                history=[(a, ya), (b, float(g(b)))],
+                L=L,
+                converged=True,
+                gap=0.0,
+                stop_reason="функция постоянна на отрезке",
+            )
 
     ya = float(g(a))
     yb = float(g(b))
@@ -176,10 +179,15 @@ def broken_lines(f: Callable, a: float, b: float, eps: float,
         # критерий остановки: истинный минимум лежит в [best_R, f_best]
         f_best = min(y for _, y in points)
         gap = f_best - best_R
-        if best_x is None or gap <= eps:
-            converged = (best_x is not None) and (gap <= eps)
-            stop_reason = ("достигнута точность eps"
-                           if converged else "не удалось построить вершину")
+        if abs(gap) <= 1e-15:
+            converged = True
+            stop_reason = "функция постоянна на рассмотренных точках"
+            break
+        if gap < -1e-12:
+            converged = False
+            stop_reason = (
+                "отрицательный разрыв: L занижена или функция не липшицева"
+            )
             break
 
         # защита от зацикливания: если точка почти совпала с имеющейся,
@@ -384,4 +392,4 @@ if __name__ == "__main__":
     run_demo("Ввод с консоли: f(x) = x + sin(3.14159x)",
              user_f, -2, 2, 1e-3, filename="console_example")
 
-    # interactive_input()
+    interactive_input()
