@@ -1,7 +1,5 @@
-"""Лабораторная № 3. Метод множителей Лагранжа, вариант 13.
-
-Запуск: python lab3.py. Требуется sympy==1.14.0.
-Обоснование полноты кандидатов и глобальности приведено в report.md.
+"""
+Лабораторная № 3. Метод множителей Лагранжа, вариант 13
 """
 
 from dataclasses import dataclass
@@ -30,7 +28,9 @@ class Candidate:
 
 
 def is_zero(value):
-    """Сначала проверяем точно; допуск нужен только для численных остатков."""
+    """
+    Проверяем. Допуск нужен только для численных остатков
+    """
     value = sp.simplify(value)
     if value == 0:
         return True
@@ -45,7 +45,7 @@ def solve_problem():
     unknowns = VARIABLES + MULTIPLIERS
     jacobian = sp.Matrix(CONSTRAINTS).jacobian(VARIABLES)
 
-    # При одном ограничении особые точки ищем из h = 0 и grad(h) = 0.
+    # При одном ограничении особые точки ищем из h = 0 и grad(h) = 0
     singular_points = sp.solve(
         list(CONSTRAINTS) + list(jacobian), VARIABLES, dict=True
     )
@@ -102,7 +102,8 @@ def main():
     print("Область определения: R^2; допустимое множество: единичная окружность.")
     print("Якобиан ограничений:", jacobian)
     gradient_norm_squared = sum(e**2 for e in jacobian)
-    # На h = 0 это выражение равно квадрату нормы градиента.
+    
+    # На h = 0 это выражение равно квадрату нормы градиента
     print("Квадрат нормы grad(h) на окружности:",
           sp.simplify(gradient_norm_squared - 4 * CONSTRAINTS[0]))
     print("Особых допустимых точек нет; ранг Якобиана на окружности равен 1.")
@@ -126,10 +127,10 @@ def main():
     print("\nИтог:")
     for label, candidate in (("минимум", candidates[0]), ("максимум", candidates[-1])):
         print(f"  глобальный {label}: {candidate.value}, точка {candidate.point}")
-    print("  Основание: окружность компактна, f непрерывна, все точки регулярны.")
-    print("  Полнота списка доказана в отчёте: lambda != -1 и (1+lambda)^2 = 5.")
-    print("  Поэтому достаточно сравнить значения во всех найденных кандидатах.")
-    print("  EPS =", EPS, "; здесь все невязки равны нулю точно.")
+    print("  Основание: окружность компактна, f непрерывна, все точки регулярны")
+    print("  Полнота списка доказана в отчёте: lambda != -1 и (1+lambda)^2 = 5")
+    print("  Поэтому достаточно сравнить значения во всех найденных кандидатах")
+    print("  EPS =", EPS, "; здесь все невязки равны нулю точно")
 
 
 if __name__ == "__main__":
