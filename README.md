@@ -12,5 +12,7 @@
 
 [Лабораторная 2](lab2)
 
+[Лабораторная 3](lab3)
+
 ## Контакты
 [Telegram](https://t.me/leonardo_Wer)
