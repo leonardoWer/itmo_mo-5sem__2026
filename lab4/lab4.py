@@ -64,11 +64,7 @@ class Bellman:
             next_weights = weights[step + 1]
             if next_weights is None:
                 break
-            cash = next_weights[3] * 1000
-            carry = [
-                sum(p * rates[i] * next_weights[i] for p, rates in self.data.market[step])
-                for i in range(3)
-            ]
+            *carry, cash = self.market_weights(step, next_weights)
             if any(value * 100 > cash * (100 + fee)
                    for value, fee in zip(carry, self.data.fees)):
                 break
@@ -121,10 +117,13 @@ class Bellman:
         weights = self.weights[step + 1]
         if weights is None:
             return None
+        return self.market_weights(step, weights)
+
+    def market_weights(self, step, next_weights):
         return (
-            *(sum(p * rates[i] * weights[i] for p, rates in self.data.market[step])
+            *(sum(p * rates[i] * next_weights[i] for p, rates in self.data.market[step])
               for i in range(3)),
-            1000 * weights[3],
+            1000 * next_weights[3],
         )
 
     def last_trade(self, step, state, weights):
@@ -149,11 +148,18 @@ class Bellman:
         if step == self.steps:
             # Этапы закончились: складываем стоимости активов и свободные деньги
             return sum(state), ()
-        weights = self.continuation_weights(step)
-        if step == self.steps - 1:
-            direct = self.last_trade(step, state, weights)
+        is_last = step == self.steps - 1
+        if is_last:
+            # После последнего рынка капитал равен сумме стоимостей и денег
+            # Эти веса дают точное ожидание для любой сделки
+            exact_weights = self.market_weights(step, (1, 1, 1, 1))
+            direct = self.last_trade(step, state, exact_weights)
             if direct is not None:
                 return direct
+            # Если короткое правило неприменимо, проверяем все допустимые сделки
+            weights = None
+        else:
+            weights = self.continuation_weights(step)
         if weights is None:
             candidates = ((None, action, after) for action, after in self.trades(step, state))
         else:
@@ -169,8 +175,8 @@ class Bellman:
             # При равенстве проверяем сделку: она тоже может оказаться оптимальной
             if upper is not None and best is not None and upper < best:
                 break
-            if step == self.steps - 1:
-                result = upper
+            if is_last:
+                result = score(exact_weights, after)
             else:
                 result = self.expected_value(step, after)
             if result is None:
