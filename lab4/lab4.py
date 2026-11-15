@@ -1,4 +1,4 @@
-"""Лабораторная работа 4. Управление инвестиционным портфелем."""
+"""Управление инвестиционным портфелем, лабораторная работа 4"""
 
 from dataclasses import dataclass
 from decimal import Decimal
@@ -30,7 +30,8 @@ class Portfolio:
             raise ValueError("У каждого этапа должны быть три сценария с корректными весами")
 
 
-# Порядок активов: ЦБ1, ЦБ2, депозит. Вес сценария задан в десятых.
+# Активы идут в порядке ЦБ1, ЦБ2, депозит
+# Вес 6 соответствует вероятности 0,6
 DATA = Portfolio(
     initial=(100, 800, 400, 600),
     lots=(25, 200, 100),
@@ -49,13 +50,15 @@ class Bellman:
     def __init__(self, data):
         self.data = data
         self.steps = len(data.market)
+        # После каждого этапа масштаб растёт в 100 раз, чтобы хранить деньги целыми
         self.scales = tuple(100 ** (k + 1) for k in range(self.steps + 1))
         self.initial = tuple(x * self.scales[0] for x in data.initial)
+        # Запоминаем лучший результат и сделки для каждой пары (этап, портфель)
         self.value = cache(self._value)
         self.weights = self.upper_weights()
 
     def upper_weights(self):
-        """Цена актива сверху при продаже без ограничений на размер пакета."""
+        """Верхняя оценка портфеля до сделок на каждом этапе"""
         weights = [None] * self.steps + [(1, 1, 1, 1)]
         for step in reversed(range(self.steps)):
             next_weights = weights[step + 1]
@@ -69,16 +72,19 @@ class Bellman:
             if any(value * 100 > cash * (100 + fee)
                    for value, fee in zip(carry, self.data.fees)):
                 break
+            # Для каждого актива выбираем более высокую оценку: удержать или продать
+            # При такой продаже можно игнорировать размер пакета и минимальный остаток
             assets = tuple(max(value, cash * (100 - fee) // 100)
                            for value, fee in zip(carry, self.data.fees))
             weights[step] = (*assets, cash)
         return weights
 
     def trades(self, step, state):
-        """Перечисляет допустимые сделки и портфели перед изменением котировок."""
+        """Перечисляет допустимые сделки и возвращает портфель сразу после каждой"""
         scale = self.scales[step]
         asset_rows = []
-        # Нижняя граница числа пакетов: остаток актива должен быть не ниже минимума.
+        # Отрицательная граница показывает, сколько пакетов можно продать
+        # Положительная граница означает, что нужно докупить актив до минимума
         limits = [(minimum * scale - amount, lot * scale)
                   for minimum, amount, lot in zip(self.data.minimums, state, self.data.lots)]
         lower = [-(-gap // size) for gap, size in limits]
@@ -90,6 +96,7 @@ class Bellman:
         for i, ((_, size), fee) in enumerate(zip(limits, self.data.fees)):
             buy_cost = size * (100 + fee) // 100
             sell_income = size * (100 - fee) // 100
+            # На покупку можно потратить остаток денег и выручку от других активов
             upper = max(0, (available - sells[i]) // buy_cost)
             asset_rows.append([
                 (count, state[i] + count * size,
@@ -104,12 +111,13 @@ class Bellman:
                         yield (n1, n2, n3), (a1, a2, a3, balance + cash3)
 
     def successors(self, step, after):
+        # На рынке меняются стоимости активов, а деньги только переводятся в новый масштаб
         a1, a2, a3, cash = after
         for p, (g1, g2, g3) in self.data.market[step]:
             yield p, (a1 * g1, a2 * g2, a3 * g3, cash * 100)
 
     def continuation_weights(self, step):
-        """Верхняя оценка после сделки с учётом всех сценариев этапа."""
+        """Верхняя оценка после сделки с учётом всех сценариев этапа"""
         weights = self.weights[step + 1]
         if weights is None:
             return None
@@ -120,8 +128,8 @@ class Bellman:
         )
 
     def last_trade(self, step, state, weights):
-        # Если любые дополнительные сделки строго убыточны, достаточно
-        # восстановить минимумы. При нехватке денег работает общий перебор.
+        # Если любая сделка снижает итог, покупаем только до обязательного минимума
+        # Если денег на это не хватает, перебираем варианты с продажами
         if any(not weights[3] * (100 - fee) < 100 * w < weights[3] * (100 + fee)
                for w, fee in zip(weights, self.data.fees)):
             return None
@@ -139,6 +147,7 @@ class Bellman:
 
     def _value(self, step, state):
         if step == self.steps:
+            # Этапы закончились: складываем стоимости активов и свободные деньги
             return sum(state), ()
         weights = self.continuation_weights(step)
         if step == self.steps - 1:
@@ -156,7 +165,8 @@ class Bellman:
         best = None
         actions = []
         for upper, action, after in candidates:
-            # Равенство оставляем, чтобы сохранить все оптимальные сделки.
+            # Дальше оценки только ниже, поэтому поиск можно закончить
+            # При равенстве проверяем сделку: она тоже может оказаться оптимальной
             if upper is not None and best is not None and upper < best:
                 break
             if step == self.steps - 1:
@@ -172,6 +182,7 @@ class Bellman:
         return best, tuple(sorted(actions))
 
     def expected_value(self, step, after):
+        # Для одной сделки складываем лучшие продолжения с весами трёх сценариев
         result = 0
         for p, state in self.successors(step, after):
             value, _ = self.value(step + 1, state)
@@ -192,7 +203,8 @@ class Bellman:
         if step == self.steps:
             yield step, history, probability, state, (), state, value
             return
-        # Повторное перечисление проверяет допустимость восстановленной сделки.
+        # Берём первую лучшую сделку и заново проверяем её среди допустимых
+        # От портфеля после сделки строим отдельное продолжение для каждого сценария
         after = next(after for action, after in self.trades(step, state) if action == actions[0])
         yield step, history, probability, state, actions, after, value
         for name, (p, next_state) in zip(SCENARIOS, self.successors(step, after)):
